@@ -5,16 +5,30 @@ export interface Tile {
   width: number;
   height: number;
   index: number;
+  overlap: TileOverlap;
+  seed: number;
+}
+
+export interface TileOverlap {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
 }
 
 export interface WorkerInfo {
   id: string;
   name: string;
-  status: 'idle' | 'rendering' | 'disconnected';
+  status: 'idle' | 'rendering' | 'disconnected' | 'slow' | 'timeout';
   progress: number;
   currentTile: Tile | null;
   tilesRendered: number;
   joinedAt: number;
+  lastHeartbeat: number;
+  avgRenderTime: number;
+  assignedAt: number | null;
+  timeoutCount: number;
+  reconnectToken: string | null;
   dataChannel?: RTCDataChannel;
 }
 
@@ -58,6 +72,7 @@ export interface RenderParams {
   samplesPerPixel: number;
   tileSize: number;
   totalTiles: number;
+  overlapSize: number;
 }
 
 export type RenderStatus = 'idle' | 'ready' | 'rendering' | 'completed';
@@ -68,5 +83,40 @@ export interface TileResult {
   y: number;
   width: number;
   height: number;
+  overlap: TileOverlap;
   pixelData: Uint8ClampedArray;
+  renderTime: number;
+}
+
+export interface TimeoutConfig {
+  warningThreshold: number;
+  kickThreshold: number;
+  heartbeatInterval: number;
+  progressStallTimeout: number;
+}
+
+export const DEFAULT_TIMEOUT_CONFIG: TimeoutConfig = {
+  warningThreshold: 15000,
+  kickThreshold: 30000,
+  heartbeatInterval: 3000,
+  progressStallTimeout: 20000
+};
+
+export interface ReassignmentLog {
+  tileId: string;
+  fromWorkerId: string;
+  fromWorkerName: string;
+  toWorkerId: string;
+  toWorkerName: string;
+  reason: 'timeout' | 'disconnected' | 'slow';
+  timestamp: number;
+}
+
+export interface WorkerResumeState {
+  workerId: string;
+  workerName: string;
+  reconnectToken: string;
+  currentTile: Tile | null;
+  tileProgress: number;
+  partialPixelData: Uint8ClampedArray | null;
 }

@@ -1,5 +1,5 @@
 import { getSocket } from './socket';
-import type { Tile, TileResult } from '../types';
+import type { Tile, TileResult, WorkerResumeState } from '../types';
 
 export interface PeerConnectionOptions {
   onOpen?: () => void;
@@ -108,19 +108,15 @@ export function sendTileTask(dataChannel: RTCDataChannel, tile: Tile, sceneData:
   dataChannel.send(JSON.stringify(message));
 }
 
-export function sendTileResult(dataChannel: RTCDataChannel, result: TileResult): void {
+export function sendTileResult(dataChannel: RTCDataChannel, result: any): void {
   const message = {
     type: 'tile-result',
-    result
-  };
-  const jsonStr = JSON.stringify({
-    ...message,
     result: {
       ...result,
       pixelData: Array.from(result.pixelData)
     }
-  });
-  dataChannel.send(jsonStr);
+  };
+  dataChannel.send(JSON.stringify(message));
 }
 
 export function sendProgressUpdate(dataChannel: RTCDataChannel, progress: number): void {
@@ -129,4 +125,111 @@ export function sendProgressUpdate(dataChannel: RTCDataChannel, progress: number
     progress
   };
   dataChannel.send(JSON.stringify(message));
+}
+
+export function sendHeartbeat(dataChannel: RTCDataChannel): void {
+  const message = {
+    type: 'heartbeat',
+    timestamp: Date.now()
+  };
+  if (dataChannel.readyState === 'open') {
+    dataChannel.send(JSON.stringify(message));
+  }
+}
+
+export function sendHeartbeatAck(dataChannel: RTCDataChannel, originalTimestamp: number): void {
+  const message = {
+    type: 'heartbeat-ack',
+    originalTimestamp,
+    timestamp: Date.now()
+  };
+  if (dataChannel.readyState === 'open') {
+    dataChannel.send(JSON.stringify(message));
+  }
+}
+
+export function sendResumeState(dataChannel: RTCDataChannel, resumeState: WorkerResumeState): void {
+  const message = {
+    type: 'resume-state',
+    resumeState: {
+      ...resumeState,
+      partialPixelData: resumeState.partialPixelData
+        ? Array.from(resumeState.partialPixelData)
+        : null
+    }
+  };
+  if (dataChannel.readyState === 'open') {
+    dataChannel.send(JSON.stringify(message));
+  }
+}
+
+export function sendCancelTile(dataChannel: RTCDataChannel, tileId: string, reason: string): void {
+  const message = {
+    type: 'cancel-tile',
+    tileId,
+    reason
+  };
+  if (dataChannel.readyState === 'open') {
+    dataChannel.send(JSON.stringify(message));
+  }
+}
+
+export class HeartbeatManager {
+  private intervalId: number | null = null;
+  private dataChannel: RTCDataChannel | null = null;
+  private onTimeout: (() => void) | null = null;
+  private onHeartbeat: ((latency: number) => void) | null = null;
+  private lastHeartbeatSent: number = 0;
+  private missedHeartbeats: number = 0;
+  private readonly maxMissedHeartbeats: number = 3;
+
+  start(
+    dataChannel: RTCDataChannel,
+    intervalMs: number,
+    callbacks: {
+      onTimeout?: () => void;
+      onHeartbeat?: (latency: number) => void;
+    } = {}
+  ): void {
+    this.stop();
+    this.dataChannel = dataChannel;
+    this.onTimeout = callbacks.onTimeout || null;
+    this.onHeartbeat = callbacks.onHeartbeat || null;
+    this.missedHeartbeats = 0;
+
+    this.intervalId = window.setInterval(() => {
+      if (dataChannel.readyState === 'open') {
+        this.lastHeartbeatSent = Date.now();
+        this.missedHeartbeats++;
+
+        if (this.missedHeartbeats > this.maxMissedHeartbeats) {
+          console.warn('Heartbeat timeout: too many missed heartbeats');
+          this.onTimeout?.();
+          this.stop();
+          return;
+        }
+
+        sendHeartbeat(dataChannel);
+      }
+    }, intervalMs);
+  }
+
+  stop(): void {
+    if (this.intervalId !== null) {
+      clearInterval(this.intervalId);
+      this.intervalId = null;
+    }
+  }
+
+  handleHeartbeatAck(): void {
+    this.missedHeartbeats = 0;
+    const latency = Date.now() - this.lastHeartbeatSent;
+    this.onHeartbeat?.(latency);
+  }
+
+  getLatency(): number {
+    return this.missedHeartbeats === 0 && this.lastHeartbeatSent > 0
+      ? Date.now() - this.lastHeartbeatSent
+      : -1;
+  }
 }

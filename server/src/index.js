@@ -11,7 +11,9 @@ const io = new Server(server, {
   cors: {
     origin: '*',
     methods: ['GET', 'POST']
-  }
+  },
+  pingInterval: 5000,
+  pingTimeout: 15000
 });
 
 app.use(cors());
@@ -27,6 +29,7 @@ redis.on('error', (err) => {
 });
 
 const rooms = new Map();
+const workerReconnectTokens = new Map();
 
 const getRoomKey = (roomId) => `room:${roomId}`;
 const getWorkerKey = (roomId, workerId) => `room:${roomId}:worker:${workerId}`;
@@ -128,21 +131,72 @@ io.on('connection', (socket) => {
     callback({ success: true, roomId });
   });
 
-  socket.on('join-room', ({ roomId, workerName }, callback) => {
+  socket.on('join-room', ({ roomId, workerName, reconnectToken }, callback) => {
     const room = rooms.get(roomId);
     if (!room) {
       callback({ success: false, error: 'Room not found' });
       return;
     }
 
+    if (reconnectToken && workerReconnectTokens.has(reconnectToken)) {
+      const oldWorkerId = workerReconnectTokens.get(reconnectToken);
+      const oldWorker = room.workers.get(oldWorkerId);
+      
+      if (oldWorker) {
+        const newWorkerId = socket.id;
+        const newWorkerData = {
+          ...oldWorker,
+          id: newWorkerId,
+          status: 'idle',
+          lastHeartbeat: Date.now().toString()
+        };
+
+        room.workers.delete(oldWorkerId);
+        room.workers.set(newWorkerId, newWorkerData);
+        
+        socket.join(roomId);
+        socket.data.roomId = roomId;
+        socket.data.role = 'worker';
+        socket.data.workerData = newWorkerData;
+        socket.data.previousWorkerId = oldWorkerId;
+
+        addWorkerToRoom(roomId, newWorkerData);
+        workerReconnectTokens.delete(reconnectToken);
+
+        if (room.schedulerId) {
+          io.to(room.schedulerId).emit('worker-reconnected', {
+            oldWorkerId,
+            newWorkerId,
+            workerName: newWorkerData.name,
+            hadActiveTile: oldWorker.currentTile !== null && oldWorker.currentTile !== ''
+          });
+        }
+
+        console.log('Worker reconnected:', oldWorkerId, '->', newWorkerId);
+        callback({ 
+          success: true, 
+          workerId: newWorkerId, 
+          roomId,
+          isReconnect: true,
+          previousTile: oldWorker.currentTile || null
+        });
+        return;
+      }
+    }
+
     const workerId = socket.id;
+    const newReconnectToken = uuidv4();
     const workerData = {
       id: workerId,
       name: workerName || `Worker-${workerId.slice(0, 4)}`,
       status: 'idle',
       joinedAt: Date.now().toString(),
+      lastHeartbeat: Date.now().toString(),
       tilesRendered: '0',
-      currentTile: ''
+      currentTile: '',
+      avgRenderTime: '0',
+      timeoutCount: '0',
+      reconnectToken: newReconnectToken
     };
 
     socket.join(roomId);
@@ -152,11 +206,33 @@ io.on('connection', (socket) => {
 
     addWorkerToRoom(roomId, workerData);
     room.workers.set(workerId, workerData);
+    workerReconnectTokens.set(newReconnectToken, workerId);
 
     io.to(room.schedulerId).emit('worker-joined', workerData);
     
     console.log('Worker joined room:', roomId, 'worker:', workerId);
-    callback({ success: true, workerId, roomId });
+    callback({ success: true, workerId, roomId, reconnectToken: newReconnectToken });
+  });
+
+  socket.on('worker-heartbeat', ({ roomId, workerId, progress }) => {
+    const room = rooms.get(roomId);
+    if (!room) return;
+
+    if (room.workers.has(workerId)) {
+      const worker = room.workers.get(workerId);
+      worker.lastHeartbeat = Date.now().toString();
+      if (progress !== undefined) {
+        worker.progress = progress.toString();
+      }
+    }
+
+    if (room.schedulerId) {
+      io.to(room.schedulerId).emit('worker-heartbeat', {
+        workerId,
+        timestamp: Date.now(),
+        progress
+      });
+    }
   });
 
   socket.on('scene-uploaded', ({ roomId, sceneData }, callback) => {
@@ -197,7 +273,8 @@ io.on('connection', (socket) => {
     try {
       redis.hset(getWorkerKey(roomId, workerId), {
         status: 'rendering',
-        currentTile: JSON.stringify(tile)
+        currentTile: JSON.stringify(tile),
+        assignedAt: Date.now().toString()
       });
     } catch {
       const room = rooms.get(roomId);
@@ -205,12 +282,13 @@ io.on('connection', (socket) => {
         const worker = room.workers.get(workerId);
         worker.status = 'rendering';
         worker.currentTile = tile;
+        worker.assignedAt = Date.now().toString();
       }
     }
     callback?.({ success: true });
   });
 
-  socket.on('tile-completed', ({ roomId, workerId, tile }, callback) => {
+  socket.on('tile-completed', ({ roomId, workerId, tile, renderTime }, callback) => {
     try {
       redis.hincrby(getWorkerKey(roomId, workerId), 'tilesRendered', 1);
       redis.hset(getWorkerKey(roomId, workerId), {
@@ -218,6 +296,12 @@ io.on('connection', (socket) => {
         currentTile: ''
       });
       redis.hincrby(getRoomKey(roomId), 'completedTiles', 1);
+      if (renderTime) {
+        const workerData = redis.hgetall(getWorkerKey(roomId, workerId));
+        const oldAvg = parseFloat(workerData.avgRenderTime || '0');
+        const newAvg = oldAvg === 0 ? renderTime : (oldAvg * 0.7 + renderTime * 0.3);
+        redis.hset(getWorkerKey(roomId, workerId), { avgRenderTime: newAvg.toString() });
+      }
     } catch {
       const room = rooms.get(roomId);
       if (room && room.workers.has(workerId)) {
@@ -225,12 +309,16 @@ io.on('connection', (socket) => {
         worker.status = 'idle';
         worker.currentTile = null;
         worker.tilesRendered = (parseInt(worker.tilesRendered || '0') + 1).toString();
+        if (renderTime) {
+          const oldAvg = parseFloat(worker.avgRenderTime || '0');
+          worker.avgRenderTime = (oldAvg === 0 ? renderTime : (oldAvg * 0.7 + renderTime * 0.3)).toString();
+        }
       }
     }
 
     const room = rooms.get(roomId);
     if (room && room.schedulerId) {
-      io.to(room.schedulerId).emit('tile-completed', { workerId, tile });
+      io.to(room.schedulerId).emit('tile-completed', { workerId, tile, renderTime });
     }
 
     callback?.({ success: true });
@@ -252,6 +340,11 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('tile-reassigned', ({ roomId, tileId, fromWorkerId, toWorkerId, reason }, callback) => {
+    console.log('Tile reassigned:', tileId, 'from', fromWorkerId, 'to', toWorkerId, 'reason:', reason);
+    callback?.({ success: true });
+  });
+
   socket.on('offer', ({ to, offer }) => {
     io.to(to).emit('offer', { from: socket.id, offer });
   });
@@ -265,16 +358,30 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', async () => {
-    const { roomId, role } = socket.data;
+    const { roomId, role, workerData } = socket.data;
     if (!roomId) return;
 
     console.log('Client disconnected:', socket.id, 'role:', role);
 
     if (role === 'worker') {
-      await removeWorkerFromRoom(roomId, socket.id);
       const room = rooms.get(roomId);
+      if (room && room.workers.has(socket.id)) {
+        const worker = room.workers.get(socket.id);
+        worker.status = 'disconnected';
+        worker.disconnectedAt = Date.now().toString();
+        
+        if (worker.reconnectToken) {
+          workerReconnectTokens.set(worker.reconnectToken, socket.id);
+        }
+      }
+
       if (room && room.schedulerId) {
-        io.to(room.schedulerId).emit('worker-left', { workerId: socket.id });
+        const worker = room.workers.get(socket.id);
+        io.to(room.schedulerId).emit('worker-left', { 
+          workerId: socket.id,
+          hadActiveTile: worker?.currentTile !== null && worker?.currentTile !== '',
+          reconnectToken: worker?.reconnectToken
+        });
       }
     } else if (role === 'scheduler') {
       const room = rooms.get(roomId);

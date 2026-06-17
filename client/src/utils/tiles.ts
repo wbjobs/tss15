@@ -1,9 +1,10 @@
-import type { Tile } from '../types';
+import type { Tile, TileOverlap } from '../types';
 
 export function generateTiles(
   width: number,
   height: number,
-  tileSize: number
+  tileSize: number,
+  overlapSize: number = 4
 ): Tile[] {
   const tiles: Tile[] = [];
   let index = 0;
@@ -18,19 +19,38 @@ export function generateTiles(
       const tileWidth = Math.min(tileSize, width - x);
       const tileHeight = Math.min(tileSize, height - y);
 
+      const overlap: TileOverlap = {
+        top: row > 0 ? overlapSize : 0,
+        bottom: row < rows - 1 ? overlapSize : 0,
+        left: col > 0 ? overlapSize : 0,
+        right: col < cols - 1 ? overlapSize : 0
+      };
+
+      const seed = hashTileSeed(index, x, y);
+
       tiles.push({
         id: `tile-${index}`,
         x,
         y,
         width: tileWidth,
         height: tileHeight,
-        index
+        index,
+        overlap,
+        seed
       });
       index++;
     }
   }
 
   return shuffleTiles(tiles);
+}
+
+function hashTileSeed(index: number, x: number, y: number): number {
+  let h = index * 2654435761;
+  h = (h + x * 340573321) | 0;
+  h = (h + y * 2246822519) | 0;
+  h = ((h ^ (h >> 16)) * 3266489917) | 0;
+  return h >>> 0;
 }
 
 export function shuffleTiles(tiles: Tile[]): Tile[] {
