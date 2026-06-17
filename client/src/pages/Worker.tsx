@@ -7,11 +7,12 @@ import {
   handleOffer,
   addIceCandidate,
   sendTileResult,
+  sendIncrementalTileResult,
   sendProgressUpdate,
   sendHeartbeatAck
 } from '../services/webrtc';
-import { renderTile } from '../renderer/pathTracer';
-import type { Tile, SceneData, TileResult, TileOverlap, WorkerResumeState } from '../types';
+import { renderTile, renderTileIncremental } from '../renderer/pathTracer';
+import type { Tile, SceneData, TileResult, TileOverlap, WorkerResumeState, IncrementalTileTask } from '../types';
 import '../styles/Worker.css';
 
 type WorkerStatus = 'connecting' | 'waiting' | 'rendering' | 'disconnected' | 'reconnecting' | 'cancelling';
@@ -36,6 +37,8 @@ function Worker() {
   const [latency, setLatency] = useState<number>(-1);
   const [reconnectAttempts, setReconnectAttempts] = useState(0);
   const [cancelReason, setCancelReason] = useState('');
+  const [currentBatchId, setCurrentBatchId] = useState<string | null>(null);
+  const [sampleRange, setSampleRange] = useState<{ start: number; end: number } | null>(null);
 
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const dataChannelRef = useRef<RTCDataChannel | null>(null);
@@ -640,10 +643,93 @@ function Worker() {
     }
   }, [renderTileWithCancel, progress, saveResumeState, clearResumeState, cancelReason]);
 
+  const handleIncrementalTileTask = useCallback(async (task: IncrementalTileTask) => {
+    if (isRenderingRef.current) {
+      console.warn('Received incremental tile task while already rendering, cancelling previous');
+      cancelRequestedRef.current = true;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+
+    const { tile, sceneData: scene, startSample, endSample, batchId } = task;
+
+    cancelRequestedRef.current = false;
+    isRenderingRef.current = true;
+    currentTileIdRef.current = tile.id;
+    setCurrentTile(tile);
+    setStatus('rendering');
+    setProgress(0);
+    setSceneData(scene);
+    setCancelReason('');
+    setCurrentBatchId(batchId);
+    setSampleRange({ start: startSample, end: endSample });
+
+    try {
+      const result = renderTileIncremental(
+        scene,
+        tile.x, tile.y, tile.width, tile.height,
+        tile.index,
+        tile.overlap,
+        startSample,
+        endSample,
+        (progress) => {
+          setProgress(progress);
+          if (dataChannelRef.current && dataChannelRef.current.readyState === 'open') {
+            sendProgressUpdate(dataChannelRef.current, progress);
+          }
+        },
+        () => cancelRequestedRef.current
+      );
+
+      if (result.cancelled) {
+        console.log('Incremental tile rendering cancelled:', tile.id, 'Reason:', cancelReason);
+        return;
+      }
+
+      const tileResult = {
+        tileId: tile.id,
+        x: tile.x,
+        y: tile.y,
+        width: tile.width,
+        height: tile.height,
+        overlap: tile.overlap,
+        accumulatedColor: Array.from(result.accumulatedColor),
+        sampleCount: endSample - startSample,
+        batchId,
+        renderTime: 0,
+        coreWidth: result.coreWidth,
+        coreHeight: result.coreHeight
+      };
+
+      if (dataChannelRef.current && dataChannelRef.current.readyState === 'open') {
+        sendIncrementalTileResult(dataChannelRef.current, tileResult as any);
+      }
+
+      setTilesRendered(prev => prev + 1);
+
+    } catch (error) {
+      console.error('Error rendering incremental tile:', error);
+      setError('渲染出错');
+    } finally {
+      isRenderingRef.current = false;
+      currentTileIdRef.current = null;
+      setCurrentTile(null);
+      setCurrentBatchId(null);
+      setSampleRange(null);
+      if (!cancelRequestedRef.current) {
+        setStatus('waiting');
+      }
+      setProgress(0);
+    }
+  }, [cancelReason]);
+
   const handleSchedulerMessage = useCallback((message: any) => {
     switch (message.type) {
       case 'tile-task':
         handleTileTask(message.tile, message.sceneData, 0);
+        break;
+
+      case 'incremental-tile-task':
+        handleIncrementalTileTask(message.task);
         break;
 
       case 'heartbeat':
@@ -681,7 +767,7 @@ function Worker() {
       default:
         console.warn('Unknown message type:', message.type);
     }
-  }, [handleTileTask]);
+  }, [handleTileTask, handleIncrementalTileTask]);
 
   useEffect(() => {
     if (status === 'waiting' && reconnectToken) {

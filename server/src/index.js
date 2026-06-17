@@ -4,6 +4,17 @@ import { Server } from 'socket.io';
 import cors from 'cors';
 import Redis from 'ioredis';
 import { v4 as uuidv4 } from 'uuid';
+import {
+  initGalleryStore,
+  saveRenderTask,
+  saveTileLog,
+  saveTaskWorker,
+  getRenderTasks,
+  getRenderTaskById,
+  getTaskImage,
+  deleteRenderTask,
+  isUsingPostgres
+} from './galleryStore.js';
 
 const app = express();
 const server = createServer(app);
@@ -425,8 +436,107 @@ app.get('/api/rooms/:roomId/workers', async (req, res) => {
   }
 });
 
+app.get('/api/gallery/tasks', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 50;
+    const offset = parseInt(req.query.offset) || 0;
+    const tasks = await getRenderTasks(limit, offset);
+    res.json({ success: true, tasks, usingPostgres: isUsingPostgres() });
+  } catch (error) {
+    console.error('Failed to get gallery tasks:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/gallery/tasks/:taskId', async (req, res) => {
+  try {
+    const task = await getRenderTaskById(req.params.taskId);
+    if (!task) {
+      res.status(404).json({ success: false, error: 'Task not found' });
+      return;
+    }
+    res.json({ success: true, task });
+  } catch (error) {
+    console.error('Failed to get gallery task:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/gallery/tasks/:taskId/image', async (req, res) => {
+  try {
+    const imageData = await getTaskImage(req.params.taskId);
+    if (!imageData) {
+      res.status(404).json({ success: false, error: 'Image not found' });
+      return;
+    }
+    const imgBuffer = Buffer.from(imageData, 'base64');
+    res.setHeader('Content-Type', 'image/png');
+    res.send(imgBuffer);
+  } catch (error) {
+    console.error('Failed to get task image:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/gallery/tasks', express.json({ limit: '50mb' }), async (req, res) => {
+  try {
+    const taskData = req.body;
+    if (!taskData.width || !taskData.height || !taskData.samplesPerPixel) {
+      res.status(400).json({ success: false, error: 'Missing required fields' });
+      return;
+    }
+
+    let imageBuffer = null;
+    if (taskData.imageData) {
+      if (typeof taskData.imageData === 'string') {
+        imageBuffer = Buffer.from(taskData.imageData, 'base64');
+      } else {
+        imageBuffer = Buffer.from(taskData.imageData);
+      }
+    }
+
+    const taskId = await saveRenderTask({
+      ...taskData,
+      imageData: imageBuffer
+    });
+
+    if (taskData.tileLogs && Array.isArray(taskData.tileLogs)) {
+      for (const log of taskData.tileLogs.slice(0, 500)) {
+        await saveTileLog(taskId, log);
+      }
+    }
+
+    if (taskData.workers && Array.isArray(taskData.workers)) {
+      for (const worker of taskData.workers) {
+        await saveTaskWorker(taskId, worker);
+      }
+    }
+
+    res.json({ success: true, taskId });
+  } catch (error) {
+    console.error('Failed to save gallery task:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/gallery/tasks/:taskId', async (req, res) => {
+  try {
+    const result = await deleteRenderTask(req.params.taskId);
+    if (!result) {
+      res.status(404).json({ success: false, error: 'Task not found' });
+      return;
+    }
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Failed to delete gallery task:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 const PORT = process.env.PORT || 3001;
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
   console.log(`Signaling server running on port ${PORT}`);
   console.log(`Redis status: ${redis.status}`);
+  await initGalleryStore();
+  console.log(`Gallery storage: ${isUsingPostgres() ? 'PostgreSQL' : 'In-Memory'}`);
 });

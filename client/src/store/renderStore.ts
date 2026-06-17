@@ -1,20 +1,23 @@
 import { create } from 'zustand';
+import { v4 as uuidv4 } from 'uuid';
 import type {
   WorkerInfo, Tile, SceneData, TileResult, TileOverlap,
   RenderStatus, RenderParams, TimeoutConfig, ReassignmentLog,
-  DEFAULT_TIMEOUT_CONFIG
+  IncrementalTileResult, TileProgressLog, ProgressiveStatus,
+  DEFAULT_BATCH_SAMPLES, DEFAULT_TARGET_SAMPLES
 } from '../types';
-import { blendOverlapTile } from '../renderer/pathTracer';
+import { blendOverlapTile, accumulateTileResult, toneMapAndGammaCorrect, createAccumulationBuffer } from '../renderer/pathTracer';
 
 interface RenderState {
   roomId: string | null;
   role: 'scheduler' | 'worker' | null;
   status: RenderStatus;
+  progressiveStatus: ProgressiveStatus;
   workers: Map<string, WorkerInfo>;
   tiles: Tile[];
   completedTiles: Set<string>;
   pendingTiles: Tile[];
-  inFlightTiles: Map<string, { tile: Tile; workerId: string; assignedAt: number }>;
+  inFlightTiles: Map<string, { tile: Tile; workerId: string; assignedAt: number; batchId: string; startSample: number; endSample: number }>;
   sceneData: SceneData | null;
   renderParams: RenderParams | null;
   finalImageData: ImageData | null;
@@ -24,14 +27,30 @@ interface RenderState {
   overlapSize: number;
   workerResumeStates: Map<string, { tile: Tile; progress: number; partialData: Uint8ClampedArray | null }>;
 
+  accumulationBuffer: {
+    colorData: Float32Array;
+    sampleCount: Uint32Array;
+    width: number;
+    height: number;
+  } | null;
+  currentSamples: number;
+  targetSamples: number;
+  batchSize: number;
+  currentBatchId: string | null;
+  batchCompletedTiles: Set<string>;
+  tileProgressLogs: TileProgressLog[];
+
   setRoomId: (id: string | null) => void;
   setRole: (role: 'scheduler' | 'worker' | null) => void;
   setStatus: (status: RenderStatus) => void;
+  setProgressiveStatus: (status: ProgressiveStatus) => void;
   setSceneData: (data: SceneData | null) => void;
   setRenderParams: (params: RenderParams | null) => void;
   setError: (error: string | null) => void;
   setTimeoutConfig: (config: TimeoutConfig) => void;
   setOverlapSize: (size: number) => void;
+  setTargetSamples: (samples: number) => void;
+  setBatchSize: (size: number) => void;
 
   addWorker: (worker: WorkerInfo) => void;
   removeWorker: (workerId: string) => void;
@@ -42,7 +61,7 @@ interface RenderState {
   addCompletedTile: (result: TileResult) => void;
   getNextTile: () => Tile | null;
   reassignTileFromWorker: (workerId: string, reason: 'timeout' | 'disconnected' | 'slow') => Tile | null;
-  markTileInFlight: (tileId: string, workerId: string) => void;
+  markTileInFlight: (tileId: string, workerId: string, batchId: string, startSample: number, endSample: number) => void;
   removeTileFromFlight: (tileId: string) => void;
 
   checkWorkerTimeouts: () => string[];
@@ -55,12 +74,21 @@ interface RenderState {
 
   setFinalImageData: (data: ImageData | null) => void;
   reset: () => void;
+
+  initAccumulationBuffer: (width: number, height: number) => void;
+  addIncrementalTileResult: (result: IncrementalTileResult & { overlap: TileOverlap; coreWidth: number; coreHeight: number }) => void;
+  updateDisplayImage: () => void;
+  startNextBatch: () => { batchId: string; startSample: number; endSample: number } | null;
+  isBatchComplete: () => boolean;
+  addTileProgressLog: (log: TileProgressLog) => void;
+  getAverageSamples: () => number;
 }
 
 export const useRenderStore = create<RenderState>((set, get) => ({
   roomId: null,
   role: null,
   status: 'idle',
+  progressiveStatus: 'idle',
   workers: new Map(),
   tiles: [],
   completedTiles: new Set(),
@@ -80,14 +108,25 @@ export const useRenderStore = create<RenderState>((set, get) => ({
   overlapSize: 4,
   workerResumeStates: new Map(),
 
+  accumulationBuffer: null,
+  currentSamples: 0,
+  targetSamples: 100,
+  batchSize: 10,
+  currentBatchId: null,
+  batchCompletedTiles: new Set(),
+  tileProgressLogs: [],
+
   setRoomId: (id) => set({ roomId: id }),
   setRole: (role) => set({ role }),
   setStatus: (status) => set({ status }),
+  setProgressiveStatus: (status) => set({ progressiveStatus: status }),
   setSceneData: (data) => set({ sceneData: data }),
   setRenderParams: (params) => set({ renderParams: params }),
   setError: (error) => set({ error }),
   setTimeoutConfig: (config) => set({ timeoutConfig: config }),
   setOverlapSize: (size) => set({ overlapSize: size }),
+  setTargetSamples: (samples) => set({ targetSamples: Math.max(1, samples) }),
+  setBatchSize: (size) => set({ batchSize: Math.max(1, size) }),
 
   addWorker: (worker) => set((state) => {
     const workers = new Map(state.workers);
@@ -130,7 +169,8 @@ export const useRenderStore = create<RenderState>((set, get) => ({
     tiles,
     pendingTiles: [...tiles],
     completedTiles: new Set(),
-    inFlightTiles: new Map()
+    inFlightTiles: new Map(),
+    batchCompletedTiles: new Set()
   }),
 
   addCompletedTile: (result) => set((state) => {
@@ -173,11 +213,11 @@ export const useRenderStore = create<RenderState>((set, get) => ({
     return tile;
   },
 
-  markTileInFlight: (tileId, workerId) => set((state) => {
+  markTileInFlight: (tileId, workerId, batchId, startSample, endSample) => set((state) => {
     const inFlightTiles = new Map(state.inFlightTiles);
     const tile = state.tiles.find(t => t.id === tileId);
     if (tile) {
-      inFlightTiles.set(tileId, { tile, workerId, assignedAt: Date.now() });
+      inFlightTiles.set(tileId, { tile, workerId, assignedAt: Date.now(), batchId, startSample, endSample });
     }
     return { inFlightTiles };
   }),
@@ -220,7 +260,10 @@ export const useRenderStore = create<RenderState>((set, get) => ({
 
     const reassignmentLogs = [...state.reassignmentLogs, log];
 
-    set({ pendingTiles, inFlightTiles, workers, reassignmentLogs });
+    const batchCompletedTiles = new Set(state.batchCompletedTiles);
+    batchCompletedTiles.delete(tile.id);
+
+    set({ pendingTiles, inFlightTiles, workers, reassignmentLogs, batchCompletedTiles });
     return tile;
   },
 
@@ -296,19 +339,134 @@ export const useRenderStore = create<RenderState>((set, get) => ({
       workers.delete(workerId);
     }
 
-    return { workers };
+    const inFlightTiles = new Map(state.inFlightTiles);
+    inFlightTiles.forEach((entry, tileId) => {
+      if (entry.workerId === workerId) {
+        inFlightTiles.set(tileId, { ...entry, workerId: newSocketId });
+      }
+    });
+
+    return { workers, inFlightTiles };
   }),
 
   setFinalImageData: (data) => set({ finalImageData: data }),
 
   reset: () => set({
     status: 'idle',
+    progressiveStatus: 'idle',
     tiles: [],
     completedTiles: new Set(),
     pendingTiles: [],
     inFlightTiles: new Map(),
     finalImageData: null,
     reassignmentLogs: [],
-    workerResumeStates: new Map()
-  })
+    workerResumeStates: new Map(),
+    accumulationBuffer: null,
+    currentSamples: 0,
+    currentBatchId: null,
+    batchCompletedTiles: new Set(),
+    tileProgressLogs: []
+  }),
+
+  initAccumulationBuffer: (width, height) => {
+    const buffer = createAccumulationBuffer(width, height);
+    const finalImageData = new ImageData(width, height);
+    set({ accumulationBuffer: buffer, finalImageData, currentSamples: 0 });
+  },
+
+  addIncrementalTileResult: (result) => set((state) => {
+    if (!state.accumulationBuffer) {
+      return state;
+    }
+
+    const buffer = {
+      colorData: new Float32Array(state.accumulationBuffer.colorData),
+      sampleCount: new Uint32Array(state.accumulationBuffer.sampleCount),
+      width: state.accumulationBuffer.width,
+      height: state.accumulationBuffer.height
+    };
+
+    accumulateTileResult(buffer, result);
+
+    const batchCompletedTiles = new Set(state.batchCompletedTiles);
+    batchCompletedTiles.add(result.tileId);
+
+    const inFlightTiles = new Map(state.inFlightTiles);
+    inFlightTiles.delete(result.tileId);
+
+    let finalImageData = state.finalImageData;
+    if (finalImageData) {
+      finalImageData = new ImageData(
+        new Uint8ClampedArray(finalImageData.data),
+        finalImageData.width,
+        finalImageData.height
+      );
+    }
+
+    return {
+      accumulationBuffer: buffer,
+      batchCompletedTiles,
+      inFlightTiles,
+      finalImageData
+    };
+  }),
+
+  updateDisplayImage: () => set((state) => {
+    if (!state.accumulationBuffer || !state.finalImageData) {
+      return state;
+    }
+
+    const finalImageData = new ImageData(
+      new Uint8ClampedArray(state.finalImageData.data),
+      state.finalImageData.width,
+      state.finalImageData.height
+    );
+
+    toneMapAndGammaCorrect(state.accumulationBuffer, finalImageData);
+
+    return { finalImageData };
+  }),
+
+  startNextBatch: () => {
+    const state = get();
+    if (state.currentSamples >= state.targetSamples) {
+      return null;
+    }
+
+    const startSample = state.currentSamples;
+    const endSample = Math.min(state.currentSamples + state.batchSize, state.targetSamples);
+    const batchId = uuidv4();
+
+    const pendingTiles = [...state.tiles];
+
+    set({
+      currentBatchId: batchId,
+      pendingTiles,
+      batchCompletedTiles: new Set(),
+      progressiveStatus: 'rendering',
+      status: 'rendering'
+    });
+
+    return { batchId, startSample, endSample };
+  },
+
+  isBatchComplete: () => {
+    const state = get();
+    return state.batchCompletedTiles.size >= state.tiles.length && state.inFlightTiles.size === 0;
+  },
+
+  addTileProgressLog: (log) => set((state) => ({
+    tileProgressLogs: [...state.tileProgressLogs, log]
+  })),
+
+  getAverageSamples: () => {
+    const state = get();
+    if (!state.accumulationBuffer) return 0;
+    const { sampleCount, width, height } = state.accumulationBuffer;
+    let total = 0;
+    for (let i = 0; i < sampleCount.length; i++) {
+      total += sampleCount[i];
+    }
+    return total / (width * height);
+  }
 }));

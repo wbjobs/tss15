@@ -5,6 +5,7 @@ import '../styles/Home.css';
 
 function Home() {
   const navigate = useNavigate();
+  const goGallery = () => navigate('/gallery');
   const [roomCode, setRoomCode] = useState('');
   const [workerName, setWorkerName] = useState('');
   const [isCreating, setIsCreating] = useState(false);
@@ -178,6 +179,14 @@ function Home() {
             {error}
           </div>
         )}
+
+        <div className="gallery-entry">
+          <button className="btn-gallery" onClick={goGallery}>
+            <span className="gallery-icon">🖼️</span>
+            <span>历史渲染画廊</span>
+            <span className="gallery-hint">查看和对比历史渲染任务</span>
+          </button>
+        </div>
 
         <div className="how-it-works">
           <h3>工作原理</h3>

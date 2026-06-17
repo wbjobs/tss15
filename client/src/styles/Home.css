@@ -290,6 +290,48 @@
   margin-bottom: 20px;
 }
 
+.gallery-entry {
+  margin-bottom: 24px;
+}
+
+.btn-gallery {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 20px;
+  background: linear-gradient(135deg, rgba(124, 92, 255, 0.15), rgba(0, 212, 255, 0.15));
+  border: 1px solid rgba(124, 92, 255, 0.3);
+  border-radius: 12px;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.3s ease;
+  text-align: left;
+}
+
+.btn-gallery:hover {
+  background: linear-gradient(135deg, rgba(124, 92, 255, 0.25), rgba(0, 212, 255, 0.25));
+  border-color: rgba(124, 92, 255, 0.5);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(124, 92, 255, 0.2);
+}
+
+.gallery-icon {
+  font-size: 28px;
+}
+
+.btn-gallery span:nth-child(2) {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.gallery-hint {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-left: auto;
+}
+
 .how-it-works {
   text-align: center;
   padding: 30px;

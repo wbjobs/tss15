@@ -120,3 +120,80 @@ export interface WorkerResumeState {
   tileProgress: number;
   partialPixelData: Uint8ClampedArray | null;
 }
+
+export interface IncrementalTileTask {
+  tile: Tile;
+  sceneData: SceneData;
+  startSample: number;
+  endSample: number;
+  batchId: string;
+}
+
+export interface IncrementalTileResult {
+  tileId: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  overlap: TileOverlap;
+  accumulatedColor: Float32Array;
+  sampleCount: number;
+  batchId: string;
+  renderTime: number;
+  coreWidth: number;
+  coreHeight: number;
+}
+
+export interface AccumulationBuffer {
+  width: number;
+  height: number;
+  colorData: Float32Array;
+  sampleCount: Uint32Array;
+}
+
+export type ProgressiveStatus = 'idle' | 'rendering' | 'paused' | 'completed';
+
+export interface TileProgressLog {
+  tileId: string;
+  tileIndex: number;
+  workerId: string;
+  workerName: string;
+  startTime: number;
+  endTime: number;
+  samplesRendered: number;
+}
+
+export interface RenderTaskRecord {
+  id: string;
+  name: string;
+  createdAt: number;
+  completedAt?: number;
+  status: 'in_progress' | 'completed' | 'failed';
+  sceneName: string;
+  width: number;
+  height: number;
+  totalSamples: number;
+  tileSize: number;
+  overlapSize: number;
+  workers: WorkerInfo[];
+  tileProgressLogs: TileProgressLog[];
+  finalImageData?: string;
+  thumbnailData?: string;
+  params: {
+    samplesPerPixel: number;
+    lightIntensity?: number;
+    fov?: number;
+  };
+}
+
+export interface GalleryCompareItem {
+  taskId: string;
+  taskName: string;
+  thumbnailData: string;
+  params: RenderTaskRecord['params'];
+}
+
+export const DEFAULT_BATCH_SAMPLES = 10;
+export const DEFAULT_TARGET_SAMPLES = 100;
+export const MIN_TARGET_SAMPLES = 10;
+export const MAX_TARGET_SAMPLES = 1000;

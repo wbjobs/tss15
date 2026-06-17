@@ -1,5 +1,5 @@
 import { getSocket } from './socket';
-import type { Tile, TileResult, WorkerResumeState } from '../types';
+import type { Tile, TileResult, WorkerResumeState, IncrementalTileTask, IncrementalTileResult, TileOverlap } from '../types';
 
 export interface PeerConnectionOptions {
   onOpen?: () => void;
@@ -231,5 +231,38 @@ export class HeartbeatManager {
     return this.missedHeartbeats === 0 && this.lastHeartbeatSent > 0
       ? Date.now() - this.lastHeartbeatSent
       : -1;
+  }
+}
+
+export function sendIncrementalTileTask(
+  dataChannel: RTCDataChannel,
+  task: IncrementalTileTask
+): void {
+  const message = {
+    type: 'incremental-tile-task',
+    tile: task.tile,
+    sceneData: task.sceneData,
+    startSample: task.startSample,
+    endSample: task.endSample,
+    batchId: task.batchId
+  };
+  if (dataChannel.readyState === 'open') {
+    dataChannel.send(JSON.stringify(message));
+  }
+}
+
+export function sendIncrementalTileResult(
+  dataChannel: RTCDataChannel,
+  result: IncrementalTileResult & { overlap: TileOverlap }
+): void {
+  const message = {
+    type: 'incremental-tile-result',
+    result: {
+      ...result,
+      accumulatedColor: Array.from(result.accumulatedColor)
+    }
+  };
+  if (dataChannel.readyState === 'open') {
+    dataChannel.send(JSON.stringify(message));
   }
 }

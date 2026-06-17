@@ -476,3 +476,237 @@ export function createDefaultScene(): SceneData {
     ]
   };
 }
+
+export function renderTileIncremental(
+  scene: SceneData,
+  tileX: number,
+  tileY: number,
+  tileWidth: number,
+  tileHeight: number,
+  tileIndex: number,
+  overlap: TileOverlap,
+  startSample: number,
+  endSample: number,
+  onProgress?: (progress: number) => void,
+  shouldCancel?: () => boolean
+): { accumulatedColor: Float32Array; sampleCount: number; coreWidth: number; coreHeight: number; cancelled: boolean } {
+  const { width, height, camera } = scene;
+  const sampleCount = endSample - startSample;
+
+  const renderX = tileX - overlap.left;
+  const renderY = tileY - overlap.top;
+  const renderWidth = tileWidth + overlap.left + overlap.right;
+  const renderHeight = tileHeight + overlap.top + overlap.bottom;
+
+  const clampedRenderX = Math.max(0, renderX);
+  const clampedRenderY = Math.max(0, renderY);
+  const clampedRenderRight = Math.min(width, renderX + renderWidth);
+  const clampedRenderBottom = Math.min(height, renderY + renderHeight);
+  const actualRenderWidth = clampedRenderRight - clampedRenderX;
+  const actualRenderHeight = clampedRenderBottom - clampedRenderY;
+
+  const accumulatedColor = new Float32Array(actualRenderWidth * actualRenderHeight * 3);
+
+  const aspectRatio = width / height;
+  const fovRad = (camera.fov * Math.PI) / 180;
+  const viewportHeight = 2 * Math.tan(fovRad / 2);
+  const viewportWidth = viewportHeight * aspectRatio;
+
+  const camPos = camera.position;
+  const camTarget = camera.target;
+  const camDir = vec3Sub(camTarget, camPos);
+  const camDirLen = vec3Length(camDir);
+  const camDirNorm = vec3Mul(camDir, 1 / camDirLen) as Vec3;
+
+  const worldUp: Vec3 = [0, 1, 0];
+  const rightCross: Vec3 = [
+    camDirNorm[1] * worldUp[2] - camDirNorm[2] * worldUp[1],
+    camDirNorm[2] * worldUp[0] - camDirNorm[0] * worldUp[2],
+    camDirNorm[0] * worldUp[1] - camDirNorm[1] * worldUp[0]
+  ];
+  const rightLen = vec3Length(rightCross);
+  const camRight = vec3Mul(rightCross, 1 / rightLen) as Vec3;
+
+  const camUp: Vec3 = [
+    camRight[1] * camDirNorm[2] - camRight[2] * camDirNorm[1],
+    camRight[2] * camDirNorm[0] - camRight[0] * camDirNorm[2],
+    camRight[0] * camDirNorm[1] - camRight[1] * camDirNorm[0]
+  ];
+
+  const totalPixels = actualRenderWidth * actualRenderHeight;
+  let pixelsRendered = 0;
+  let cancelled = false;
+
+  for (let py = 0; py < actualRenderHeight; py++) {
+    for (let px = 0; px < actualRenderWidth; px++) {
+      if (shouldCancel && shouldCancel()) {
+        cancelled = true;
+        break;
+      }
+
+      const globalPx = clampedRenderX + px;
+      const globalPy = clampedRenderY + py;
+
+      let rAccum = 0;
+      let gAccum = 0;
+      let bAccum = 0;
+
+      for (let s = startSample; s < endSample; s++) {
+        const sampleSeed = hashPixelSeed(tileIndex, globalPx, globalPy, s);
+        const rng = new SeededRNG(sampleSeed);
+
+        const jitterX = rng.next();
+        const jitterY = rng.next();
+
+        const u = ((globalPx + jitterX) / width) * 2 - 1;
+        const v = 1 - ((globalPy + jitterY) / height) * 2;
+
+        const rayDir = vec3Normalize([
+          camDirNorm[0] + camRight[0] * u * viewportWidth / 2 + camUp[0] * v * viewportHeight / 2,
+          camDirNorm[1] + camRight[1] * u * viewportWidth / 2 + camUp[1] * v * viewportHeight / 2,
+          camDirNorm[2] + camRight[2] * u * viewportWidth / 2 + camUp[2] * v * viewportHeight / 2
+        ] as Vec3);
+
+        const sampleColor = traceRay(scene, camPos, rayDir, 5, rng);
+        rAccum += sampleColor[0];
+        gAccum += sampleColor[1];
+        bAccum += sampleColor[2];
+      }
+
+      const idx = (py * actualRenderWidth + px) * 3;
+      accumulatedColor[idx] = rAccum;
+      accumulatedColor[idx + 1] = gAccum;
+      accumulatedColor[idx + 2] = bAccum;
+
+      pixelsRendered++;
+      if (onProgress && pixelsRendered % 100 === 0) {
+        onProgress(pixelsRendered / totalPixels);
+      }
+    }
+    if (cancelled) break;
+  }
+
+  onProgress?.(cancelled ? pixelsRendered / totalPixels : 1);
+
+  return {
+    accumulatedColor,
+    sampleCount: cancelled ? Math.floor(pixelsRendered / totalPixels * sampleCount) : sampleCount,
+    coreWidth: actualRenderWidth,
+    coreHeight: actualRenderHeight,
+    cancelled
+  };
+}
+
+export function accumulateTileResult(
+  accumBuffer: { colorData: Float32Array; sampleCount: Uint32Array; width: number; height: number },
+  tileResult: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    overlap: TileOverlap;
+    accumulatedColor: Float32Array;
+    sampleCount: number;
+    coreWidth: number;
+    coreHeight: number;
+  }
+): void {
+  const { x, y, width, height, overlap, accumulatedColor, sampleCount, coreWidth, coreHeight } = tileResult;
+  const overlapSize = overlap.left;
+
+  for (let py = 0; py < coreHeight; py++) {
+    const globalY = y - overlap.top + py;
+    if (globalY < 0 || globalY >= accumBuffer.height) continue;
+
+    for (let px = 0; px < coreWidth; px++) {
+      const globalX = x - overlap.left + px;
+      if (globalX < 0 || globalX >= accumBuffer.width) continue;
+
+      const srcIdx = (py * coreWidth + px) * 3;
+      const dstIdx = (globalY * accumBuffer.width + globalX) * 3;
+      const sampleIdx = globalY * accumBuffer.width + globalX;
+
+      const relX = globalX - x;
+      const relY = globalY - y;
+
+      let weight = 1.0;
+
+      if (overlapSize > 0) {
+        const leftOverlap = overlapSize - relX;
+        const rightOverlap = relX - (width - 1 - overlapSize);
+        const topOverlap = overlapSize - relY;
+        const bottomOverlap = relY - (height - 1 - overlapSize);
+
+        const xWeight = Math.min(
+          leftOverlap > 0 ? leftOverlap / overlapSize : 1,
+          rightOverlap > 0 ? 1 - rightOverlap / overlapSize : 1
+        );
+        const yWeight = Math.min(
+          topOverlap > 0 ? topOverlap / overlapSize : 1,
+          bottomOverlap > 0 ? 1 - bottomOverlap / overlapSize : 1
+        );
+
+        weight = Math.max(0, Math.min(1, xWeight * yWeight));
+      }
+
+      accumBuffer.colorData[dstIdx] += accumulatedColor[srcIdx] * weight;
+      accumBuffer.colorData[dstIdx + 1] += accumulatedColor[srcIdx + 1] * weight;
+      accumBuffer.colorData[dstIdx + 2] += accumulatedColor[srcIdx + 2] * weight;
+      accumBuffer.sampleCount[sampleIdx] += Math.floor(sampleCount * weight);
+    }
+  }
+}
+
+export function toneMapAndGammaCorrect(
+  accumBuffer: { colorData: Float32Array; sampleCount: Uint32Array; width: number; height: number },
+  outputImageData: ImageData
+): void {
+  const { colorData, sampleCount, width, height } = accumBuffer;
+
+  for (let py = 0; py < height; py++) {
+    for (let px = 0; px < width; px++) {
+      const colorIdx = (py * width + px) * 3;
+      const pixelIdx = (py * width + px) * 4;
+      const samples = sampleCount[py * width + px];
+
+      if (samples === 0) {
+        outputImageData.data[pixelIdx] = 0;
+        outputImageData.data[pixelIdx + 1] = 0;
+        outputImageData.data[pixelIdx + 2] = 0;
+        outputImageData.data[pixelIdx + 3] = 255;
+        continue;
+      }
+
+      let r = colorData[colorIdx] / samples;
+      let g = colorData[colorIdx + 1] / samples;
+      let b = colorData[colorIdx + 2] / samples;
+
+      r = r / (1 + r);
+      g = g / (1 + g);
+      b = b / (1 + b);
+
+      r = Math.pow(r, 0.45);
+      g = Math.pow(g, 0.45);
+      b = Math.pow(b, 0.45);
+
+      outputImageData.data[pixelIdx] = Math.min(255, Math.max(0, Math.round(r * 255)));
+      outputImageData.data[pixelIdx + 1] = Math.min(255, Math.max(0, Math.round(g * 255)));
+      outputImageData.data[pixelIdx + 2] = Math.min(255, Math.max(0, Math.round(b * 255)));
+      outputImageData.data[pixelIdx + 3] = 255;
+    }
+  }
+}
+
+export function createAccumulationBuffer(width: number, height: number): {
+  colorData: Float32Array;
+  sampleCount: Uint32Array;
+  width: number;
+  height: number;
+} {
+  return {
+    colorData: new Float32Array(width * height * 3),
+    sampleCount: new Uint32Array(width * height),
+    width,
+    height
+  };
+}
