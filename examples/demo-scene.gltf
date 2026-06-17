@@ -1,0 +1,233 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "Distributed Raytracer Demo"
+  },
+  "scene": 0,
+  "scenes": [
+    {
+      "name": "Default Scene",
+      "nodes": [0, 1, 2, 3, 4, 5]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "Red Sphere",
+      "translation": [0, 0.5, 0],
+      "mesh": 0
+    },
+    {
+      "name": "Metal Sphere",
+      "translation": [-1.2, 0.3, 0],
+      "mesh": 1
+    },
+    {
+      "name": "Blue Sphere",
+      "translation": [1.2, 0.35, 0.2],
+      "mesh": 2
+    },
+    {
+      "name": "Light Sphere",
+      "translation": [0.5, -0.3, -0.8],
+      "mesh": 3
+    },
+    {
+      "name": "Ground Plane",
+      "translation": [0, -0.5, 0],
+      "mesh": 4
+    },
+    {
+      "name": "Camera",
+      "translation": [0, 2, 5],
+      "camera": 0
+    }
+  ],
+  "cameras": [
+    {
+      "type": "perspective",
+      "perspective": {
+        "yfov": 1.0472,
+        "znear": 0.1,
+        "zfar": 100
+      }
+    }
+  ],
+  "meshes": [
+    {
+      "name": "Red Sphere Mesh",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1
+          },
+          "material": 0
+        }
+      ]
+    },
+    {
+      "name": "Metal Sphere Mesh",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1
+          },
+          "material": 1
+        }
+      ]
+    },
+    {
+      "name": "Blue Sphere Mesh",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1
+          },
+          "material": 2
+        }
+      ]
+    },
+    {
+      "name": "Light Sphere Mesh",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1
+          },
+          "material": 3
+        }
+      ]
+    },
+    {
+      "name": "Ground Plane Mesh",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 2,
+            "NORMAL": 3
+          },
+          "indices": 4,
+          "material": 4
+        }
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "name": "RedDiffuse",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.8, 0.3, 0.3, 1.0],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.8
+      }
+    },
+    {
+      "name": "SilverMetal",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.9, 0.9, 0.9, 1.0],
+        "metallicFactor": 1.0,
+        "roughnessFactor": 0.1
+      }
+    },
+    {
+      "name": "BlueDiffuse",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.3, 0.5, 0.9, 1.0],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.7
+      }
+    },
+    {
+      "name": "EmissiveLight",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [1.0, 1.0, 0.8, 1.0]
+      },
+      "emissiveFactor": [2.0, 2.0, 1.5]
+    },
+    {
+      "name": "GrayGround",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.6, 0.6, 0.6, 1.0],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.9
+      }
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3",
+      "max": [0.5, 0.5, 0.5],
+      "min": [-0.5, -0.5, -0.5]
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC3",
+      "max": [5, 0, 5],
+      "min": [-5, 0, -5]
+    },
+    {
+      "bufferView": 3,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 4,
+      "componentType": 5123,
+      "count": 6,
+      "type": "SCALAR"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 288,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 288,
+      "byteLength": 288,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 576,
+      "byteLength": 48,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 624,
+      "byteLength": 48,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 672,
+      "byteLength": 12,
+      "target": 34963
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 684,
+      "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    }
+  ]
+}
